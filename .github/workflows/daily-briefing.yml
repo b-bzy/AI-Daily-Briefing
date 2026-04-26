@@ -72,9 +72,8 @@ jobs:
 
           if [ "$LEN" -gt 4000 ]; then
             echo "::warning::内容超 4000 字符,截断"
-            TEXT="${TEXT:0:4000}
-
-…(已截断,完整版见仓库 $FILE)"
+            TRUNCATED="${TEXT:0:4000}"
+            TEXT=$(printf '%s\n\n%s' "$TRUNCATED" "…(已截断,完整版见仓库 $FILE)")
           fi
 
           RESP=$(curl -sS -w '\n---HTTP:%{http_code}' \
