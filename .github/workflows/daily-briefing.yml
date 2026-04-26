@@ -1,0 +1,71 @@
+name: AI Daily Briefing
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 4 * * *'    # 08:00 GST 早报 (UTC+4)
+    - cron: '0 16 * * *'   # 20:00 GST 晚报
+
+permissions:
+  contents: read
+
+concurrency:
+  group: daily-briefing
+  cancel-in-progress: false
+
+jobs:
+  push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Determine session label
+        id: ctx
+        run: |
+          HOUR=$(TZ='Asia/Dubai' date +%H)
+          if [ "$HOUR" -lt 12 ]; then
+            echo "label=早报" >> "$GITHUB_OUTPUT"
+            echo "emoji=🌅" >> "$GITHUB_OUTPUT"
+          else
+            echo "label=晚报" >> "$GITHUB_OUTPUT"
+            echo "emoji=🌙" >> "$GITHUB_OUTPUT"
+          fi
+          echo "stamp=$(TZ='Asia/Dubai' date +'%Y-%m-%d %H:%M GST')" >> "$GITHUB_OUTPUT"
+
+      - name: Send Telegram message
+        env:
+          TG_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TG_CHAT:  ${{ secrets.TELEGRAM_CHAT_ID }}
+          LABEL:    ${{ steps.ctx.outputs.label }}
+          EMOJI:    ${{ steps.ctx.outputs.emoji }}
+          STAMP:    ${{ steps.ctx.outputs.stamp }}
+          TRIGGER:  ${{ github.event_name }}
+          RUN_NO:   ${{ github.run_number }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${TG_TOKEN:-}" ] || [ -z "${TG_CHAT:-}" ]; then
+            echo "::error::缺少 TELEGRAM_BOT_TOKEN 或 TELEGRAM_CHAT_ID secret"
+            exit 1
+          fi
+
+          TEXT="${EMOJI} *AI ${LABEL}* · ${STAMP}
+
+✅ 云端定时推送已上线
+触发方式: \`${TRIGGER}\`
+Run #${RUN_NO}
+
+下一步:接入新闻搜索 → 自动生成今日 AI 摘要 🚀"
+
+          RESP=$(curl -sS -w '\n---HTTP:%{http_code}' \
+            -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${TG_CHAT}" \
+            --data-urlencode "parse_mode=Markdown" \
+            --data-urlencode "text=${TEXT}")
+
+          echo "$RESP"
+          STATUS=$(echo "$RESP" | tail -n1 | sed 's/.*HTTP://')
+
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Telegram API 返回 HTTP $STATUS"
+            exit 1
+          fi
