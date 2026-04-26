@@ -48,13 +48,14 @@ jobs:
             exit 1
           fi
 
-          TEXT="${EMOJI} *AI ${LABEL}* · ${STAMP}
-
-✅ 云端定时推送已上线
-触发方式: \`${TRIGGER}\`
-Run #${RUN_NO}
-
-下一步:接入新闻搜索 → 自动生成今日 AI 摘要 🚀"
+          TEXT=$(printf '%s\n' \
+            "${EMOJI} *AI ${LABEL}* · ${STAMP}" \
+            "" \
+            "✅ 云端定时推送已上线" \
+            "触发方式: \`${TRIGGER}\`" \
+            "Run #${RUN_NO}" \
+            "" \
+            "下一步:接入新闻搜索 → 自动生成今日 AI 摘要 🚀")
 
           RESP=$(curl -sS -w '\n---HTTP:%{http_code}' \
             -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
