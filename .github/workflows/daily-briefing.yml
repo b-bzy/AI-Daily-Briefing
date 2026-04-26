@@ -1,10 +1,16 @@
 name: AI Daily Briefing
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - 'briefings/**.md'
   workflow_dispatch:
-  schedule:
-    - cron: '0 4 * * *'    # 08:00 GST 早报 (UTC+4)
-    - cron: '0 16 * * *'   # 20:00 GST 晚报
+    inputs:
+      file:
+        description: '要发送的 briefing 文件路径(留空 = 用最新的)'
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -18,28 +24,40 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Determine session label
-        id: ctx
-        run: |
-          HOUR=$(TZ='Asia/Dubai' date +%H)
-          if [ "$HOUR" -lt 12 ]; then
-            echo "label=早报" >> "$GITHUB_OUTPUT"
-            echo "emoji=🌅" >> "$GITHUB_OUTPUT"
-          else
-            echo "label=晚报" >> "$GITHUB_OUTPUT"
-            echo "emoji=🌙" >> "$GITHUB_OUTPUT"
-          fi
-          echo "stamp=$(TZ='Asia/Dubai' date +'%Y-%m-%d %H:%M GST')" >> "$GITHUB_OUTPUT"
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
 
-      - name: Send Telegram message
+      - name: Resolve briefing file
+        id: file
+        env:
+          INPUT_FILE: ${{ inputs.file }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+
+          if [ -n "${INPUT_FILE:-}" ]; then
+            FILE="$INPUT_FILE"
+          elif [ "$EVENT" = "push" ]; then
+            FILE=$(git diff --name-only --diff-filter=AM HEAD^ HEAD -- 'briefings/*.md' | head -n 1 || true)
+          else
+            FILE=$(ls -t briefings/*.md 2>/dev/null | head -n 1 || true)
+          fi
+
+          if [ -z "${FILE:-}" ] || [ ! -f "$FILE" ]; then
+            echo "::error::没找到要发送的 briefing 文件 (got: '${FILE:-}')"
+            exit 1
+          fi
+
+          echo "file=$FILE" >> "$GITHUB_OUTPUT"
+          echo "Selected: $FILE ($(wc -c <"$FILE") bytes)"
+
+      - name: Send to Telegram
         env:
           TG_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TG_CHAT:  ${{ secrets.TELEGRAM_CHAT_ID }}
-          LABEL:    ${{ steps.ctx.outputs.label }}
-          EMOJI:    ${{ steps.ctx.outputs.emoji }}
-          STAMP:    ${{ steps.ctx.outputs.stamp }}
-          TRIGGER:  ${{ github.event_name }}
-          RUN_NO:   ${{ github.run_number }}
+          FILE:     ${{ steps.file.outputs.file }}
         run: |
           set -euo pipefail
 
@@ -48,19 +66,21 @@ jobs:
             exit 1
           fi
 
-          TEXT=$(printf '%s\n' \
-            "${EMOJI} *AI ${LABEL}* · ${STAMP}" \
-            "" \
-            "✅ 云端定时推送已上线" \
-            "触发方式: \`${TRIGGER}\`" \
-            "Run #${RUN_NO}" \
-            "" \
-            "下一步:接入新闻搜索 → 自动生成今日 AI 摘要 🚀")
+          TEXT=$(cat "$FILE")
+          LEN=${#TEXT}
+          echo "Message length: $LEN chars"
+
+          if [ "$LEN" -gt 4000 ]; then
+            echo "::warning::内容超 4000 字符,截断"
+            TEXT="${TEXT:0:4000}
+
+…(已截断,完整版见仓库 $FILE)"
+          fi
 
           RESP=$(curl -sS -w '\n---HTTP:%{http_code}' \
             -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
             --data-urlencode "chat_id=${TG_CHAT}" \
-            --data-urlencode "parse_mode=Markdown" \
+            --data-urlencode "disable_web_page_preview=true" \
             --data-urlencode "text=${TEXT}")
 
           echo "$RESP"
